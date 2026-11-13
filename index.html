@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Matt's Christmas List</title>
+<style>
+  :root {
+    --bg: #f7f3ea; --card: #fffdf8; --ink: #1f2a24; --muted: #66706a;
+    --line: #e2dccd; --accent: #1f5c43; --accent-ink: #ffffff; --claimed: #9a3b2e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141a17; --card: #1c2420; --ink: #ecebe4; --muted: #9aa69f;
+      --line: #2c3731; --accent: #7fc8a4; --accent-ink: #10231a; --claimed: #e39a8c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font: 600 2rem/1.2 Georgia, "Times New Roman", serif; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .banner {
+    border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    background: var(--card); padding: 12px 14px; border-radius: 6px; margin-bottom: 24px;
+  }
+  h2 {
+    font: 600 0.8rem/1 system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin: 32px 0 10px;
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li.item {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px; margin-bottom: 10px;
+    display: flex; gap: 12px; align-items: flex-start; justify-content: space-between;
+  }
+  .body { min-width: 0; }
+  .name { font-weight: 600; }
+  .name a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+  .meta { color: var(--muted); font-size: 0.9rem; }
+  .notes { margin-top: 2px; font-size: 0.95rem; }
+  .tag {
+    display: inline-block; font-size: 0.75rem; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px; padding: 0 8px; margin-left: 6px;
+    vertical-align: 2px;
+  }
+  .item.claimed .name, .item.claimed .notes { text-decoration: line-through; opacity: 0.6; }
+  .side { flex: none; text-align: right; }
+  .status { display: block; color: var(--claimed); font-size: 0.85rem; font-weight: 600; margin-bottom: 4px; }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer; border-radius: 6px; padding: 8px 14px;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+  }
+  button.undo { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .message { color: var(--muted); padding: 24px 0; }
+  .error { color: var(--claimed); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Matt's Christmas List</h1>
+  <p class="sub">Ideas only. No pressure, and thank you.</p>
+  <div id="banner" class="banner" hidden></div>
+  <div id="list"><p class="message">Loading the list�</p></div>
+</main>
+
+<script>
+// The web app URL from Apps Script (Deploy > Manage deployments). Ends in /exec.
+const API_URL = 'PASTE_APPS_SCRIPT_WEB_APP_URL_HERE';
+
+const PRIORITY_ORDER = { High: 0, Medium: 1, Low: 2 };
+const ERRORS = {
+  already_claimed: 'Someone else just claimed that one.',
+  not_allowed: 'This link can\'t claim gifts. Ask for the giver link.',
+  unknown_item: 'That gift is no longer on the list.',
+  busy: 'The list is busy. Try again in a moment.'
+};
+
+const giverKey = new URLSearchParams(location.search).get('k') || '';
+const listEl = document.getElementById('list');
+const bannerEl = document.getElementById('banner');
+let state = { giver: false, items: [] };
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function showMessage(text, isError) {
+  listEl.replaceChildren(el('p', 'message' + (isError ? ' error' : ''), text));
+}
+
+function safeLink(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function renderItem(item) {
+  const li = el('li', 'item' + (item.claimed ? ' claimed' : ''));
+  const body = el('div', 'body');
+
+  const name = el('div', 'name');
+  const href = safeLink(item.link);
+  if (href) {
+    const a = el('a', null, item.name);
+    a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    name.append(a);
+  } else {
+    name.append(item.name);
+  }
+  if (item.priority === 'High') name.append(el('span', 'tag', 'Top pick'));
+  body.append(name);
+
+  if (item.notes) body.append(el('div', 'notes', item.notes));
+  if (typeof item.price === 'number') {
+    body.append(el('div', 'meta', 'About $' + Math.round(item.price).toLocaleString('en-US')));
+  }
+  li.append(body);
+
+  if (state.giver) {
+    const side = el('div', 'side');
+    if (item.claimed) side.append(el('span', 'status', 'Claimed'));
+    const button = el('button', item.claimed ? 'undo' : null, item.claimed ? 'Undo' : 'I\'ll get this');
+    button.addEventListener('click', () => setClaim(item, !item.claimed, button));
+    side.append(button);
+    li.append(side);
+  }
+  return li;
+}
+
+function render() {
+  bannerEl.hidden = !state.giver;
+  if (state.giver) {
+    bannerEl.textContent = 'You\'re on the giver view. Tap "I\'ll get this" so nobody doubles up. '
+      + 'Matt\'s own link doesn\'t show what\'s been claimed.';
+  }
+  if (!state.items.length) return showMessage('Nothing on the list yet.');
+
+  const groups = new Map();
+  for (const item of state.items) {
+    if (!groups.has(item.category)) groups.set(item.category, []);
+    groups.get(item.category).push(item);
+  }
+  const frag = document.createDocumentFragment();
+  for (const [category, items] of groups) {
+    items.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3));
+    frag.append(el('h2', null, category));
+    const ul = el('ul');
+    items.forEach(item => ul.append(renderItem(item)));
+    frag.append(ul);
+  }
+  listEl.replaceChildren(frag);
+}
+
+async function load() {
+  if (!API_URL.startsWith('https://')) {
+    return showMessage('Setup isn\'t finished: API_URL in index.html still needs the Apps Script web app URL.', true);
+  }
+  try {
+    const res = await fetch(API_URL + '?k=' + encodeURIComponent(giverKey));
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'bad response');
+    state = { giver: Boolean(data.giver), items: data.items || [] };
+    render();
+  } catch (err) {
+    showMessage('Couldn\'t load the list. Refresh to try again.', true);
+  }
+}
+
+async function setClaim(item, claim, button) {
+  button.disabled = true;
+  try {
+    // A plain string body is sent as text/plain, which avoids a CORS preflight
+    // that Apps Script web apps can\'t answer.
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify({ action: claim ? 'claim' : 'unclaim', id: item.id, k: giverKey })
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      alert(ERRORS[data.error] || 'That didn\'t work. Try again.');
+      return load();
+    }
+    item.claimed = data.claimed;
+    render();
+  } catch (err) {
+    alert('Couldn\'t reach the list. Check your connection and try again.');
+    button.disabled = false;
+  }
+}
+
+load();
+</script>
+</body>
+</html>
